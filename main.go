@@ -9,15 +9,20 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+
 	r := gin.Default()
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
+	r.Use(cors.Default())
+	if os.Getenv("MONGO_URI") == "" {
+		err := godotenv.Load()
+		if err != nil {
+			log.Fatal("Error loading .env file")
+		}
 	}
 	log.Println("MONGO_URI =", os.Getenv("MONGO_URI"))
 	client := config.ConnectMongo()
@@ -27,13 +32,20 @@ func main() {
 
 	metricsCol := db.Collection("metrics")
 	traceCol := db.Collection("traces")
-
+	logsCol := db.Collection("logs")
+	kafkaadr := os.Getenv("KAFKAADR")
 	w := worker.NewWorker(
-		"localhost:9092",
-		"traces-topic",
-		"metrics-group",
+		kafkaadr,
+
+		"traces-topic", // trace topic
+		"logs-topic",   // log topic
+
+		"trace-group", // trace consumer group
+		"log-group",   // log consumer group
+
 		metricsCol,
 		traceCol,
+		logsCol,
 	)
 
 	go w.Start()
@@ -43,13 +55,16 @@ func main() {
 			"message": "Hello, Gin!",
 		})
 	})
-	r.GET("/user/:name", func(c *gin.Context) {
-		name := c.Param("name")
+	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"user": name,
+			"status": "ok",
 		})
 	})
 	r.POST("/ingest/traces", controllers.TracesController)
+	r.POST("/ingest/logs", controllers.LogsController)
 
-	r.Run(":9000")
+	err := r.Run(":9000")
+	if err != nil {
+		log.Fatal(err)
+	}
 }

@@ -8,65 +8,77 @@ import (
 	"syscall"
 	"time"
 
-	"New_folder/kafka"
-	"New_folder/services"
+	"UpblitIngestor/kafka"
+	"UpblitIngestor/services"
 
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type Worker struct {
-	consumer    *kafka.Consumer
+	traceConsumer *kafka.TraceConsumer
+	logConsumer   *kafka.LogConsumer
+
 	aggregator  *services.MetricsAggregator
 	metricsCol  *mongo.Collection
-	traceCol    *mongo.Collection
 	flushTicker *time.Ticker
 }
 
 // Constructor
 func NewWorker(
 	broker string,
-	topic string,
-	groupID string,
+	traceTopic string,
+	logTopic string,
+	traceGroupID string,
+	logGroupID string,
 	metricsCol *mongo.Collection,
 	traceCol *mongo.Collection,
+	logCol *mongo.Collection,
 ) *Worker {
 
 	agg := services.NewMetricsAggregator()
 
-	consumer := kafka.NewConsumer(
+	traceConsumer := kafka.NewTraceConsumer(
 		broker,
-		topic,
-		groupID,
+		traceTopic,
+		traceGroupID,
 		agg,
-		traceCol, // ✅ now properly passed
+		traceCol,
+	)
+
+	logConsumer := kafka.NewLogConsumer(
+		broker,
+		logTopic,
+		logGroupID,
+		logCol,
 	)
 
 	return &Worker{
-		consumer:    consumer,
-		aggregator:  agg,
-		metricsCol:  metricsCol,
-		traceCol:    traceCol,
-		flushTicker: time.NewTicker(5 * time.Minute),
+		traceConsumer: traceConsumer,
+		logConsumer:   logConsumer,
+		aggregator:    agg,
+		metricsCol:    metricsCol,
+		flushTicker:   time.NewTicker(5 * time.Minute),
 	}
 }
+
 func (w *Worker) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle shutdown signals
+	// Graceful shutdown
 	go w.handleShutdown(cancel)
 
-	// Start Kafka consumer
-	go w.consumer.Start(ctx)
+	// Start both consumers
+	go w.traceConsumer.Start(ctx)
+	go w.logConsumer.Start(ctx)
 
-	log.Println("Worker started...")
+	log.Println("Worker started (trace + log consumers)...")
 
-	// Flush loop
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("Worker shutting down...")
-			w.flush(ctx) // flush remaining data
+			w.flush(ctx)
 			return
 
 		case <-w.flushTicker.C:
@@ -74,6 +86,8 @@ func (w *Worker) Start() {
 		}
 	}
 }
+
+// Flush aggregated metrics to Mongo
 func (w *Worker) flush(ctx context.Context) {
 	metrics := w.aggregator.Flush()
 
@@ -82,19 +96,24 @@ func (w *Worker) flush(ctx context.Context) {
 		return
 	}
 
+	dbCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	docs := make([]interface{}, len(metrics))
 	for i, m := range metrics {
 		docs[i] = m
 	}
 
-	_, err := w.metricsCol.InsertMany(ctx, docs)
+	_, err := w.metricsCol.InsertMany(dbCtx, docs)
 	if err != nil {
-		log.Println("Mongo insert error:", err)
+		log.Println("Mongo metrics insert error:", err)
 		return
 	}
 
 	log.Printf("Flushed %d metrics\n", len(metrics))
 }
+
+// Handle OS shutdown signals
 func (w *Worker) handleShutdown(cancel context.CancelFunc) {
 	sigChan := make(chan os.Signal, 1)
 

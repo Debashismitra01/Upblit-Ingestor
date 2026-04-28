@@ -5,11 +5,8 @@ import (
 
 	"UpblitIngestor/dto"
 	"UpblitIngestor/models"
-
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// Convert Telemetry DTO → []Trace (one per trace)
 func ToTraceDocuments(t dto.Telemetry, projectID, applicationID int64) []models.Trace {
 	serverTime := time.Now().UTC()
 
@@ -17,7 +14,6 @@ func ToTraceDocuments(t dto.Telemetry, projectID, applicationID int64) []models.
 
 	for _, tr := range t.Traces {
 		doc := models.Trace{
-			ID: primitive.NewObjectID(),
 
 			// timestamps
 			ClientTimestamp: t.Timestamp,

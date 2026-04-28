@@ -4,14 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/gin-gonic/gin"
-)
-
-var (
-	supabaseURL = os.Getenv("SUPABASE_URL")
-	apiKey      = os.Getenv("SUPABASE_API_KEY")
 )
 
 type APIClient struct {
@@ -21,39 +17,58 @@ type APIClient struct {
 	ApplicationID int64  `json:"application_id"`
 }
 
+// Middleware to validate API key
 func APIKeyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		apiKey := c.GetHeader("x-api-key")
+		clientKey := c.GetHeader("x-api-key")
 
-		if apiKey == "" {
-			c.JSON(401, gin.H{"error": "missing api key"})
+		if clientKey == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing api key"})
 			c.Abort()
 			return
 		}
 
-		client, err := GetAPIClientByKey(apiKey)
+		client, err := GetAPIClientByKey(clientKey)
 		if err != nil {
-			c.JSON(401, gin.H{"error": "invalid api key"})
+			c.JSON(http.StatusForbidden, gin.H{"error": "invalid api key"})
 			c.Abort()
 			return
 		}
 
+		// Attach values to context
 		c.Set("project_id", client.ProjectID)
 		c.Set("application_id", client.ApplicationID)
 
 		c.Next()
 	}
 }
-func GetAPIClientByKey(key string) (*APIClient, error) {
-	url := fmt.Sprintf("%s/rest/v1/api_client?api_key=eq.%s&limit=1", supabaseURL, key)
 
-	req, err := http.NewRequest("GET", url, nil)
+// Fetch API client from Supabase
+func GetAPIClientByKey(key string) (*APIClient, error) {
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	supabaseAPIKey := os.Getenv("SUPABASE_API_KEY")
+	if supabaseURL == "" || supabaseAPIKey == "" {
+		return nil, fmt.Errorf("missing supabase environment variables")
+	}
+
+	// ✅ URL encode the key (VERY IMPORTANT)
+	encodedKey := url.QueryEscape(key)
+
+	fullURL := fmt.Sprintf(
+		"%s/rest/v1/api_client?api_key=eq.%s&limit=1",
+		supabaseURL,
+		encodedKey,
+	)
+
+	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("apikey", apiKey)
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	// Headers required by Supabase
+	req.Header.Set("apikey", supabaseAPIKey)
+	req.Header.Set("Authorization", "Bearer "+supabaseAPIKey)
+	req.Header.Set("Accept", "application/json")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -61,6 +76,11 @@ func GetAPIClientByKey(key string) (*APIClient, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	// Check status code
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supabase error: %s", resp.Status)
+	}
 
 	var result []APIClient
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

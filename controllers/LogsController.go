@@ -1,44 +1,42 @@
 package controllers
 
 import (
+	"UpblitIngestor/dto"
 	"UpblitIngestor/kafka"
+	"UpblitIngestor/services"
+	"fmt"
 	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
-
-	"UpblitIngestor/dto"
-	"UpblitIngestor/services"
 )
 
-func TracesController(c *gin.Context) {
+func LogsController(c *gin.Context) {
 	kafkaadr := os.Getenv("KAFKAADR")
 	appID := c.MustGet("application_id").(int64)
 	projID := c.MustGet("project_id").(int64)
 
-	// Parse request body
-	var telemetry dto.Telemetry
-	if err := c.ShouldBindJSON(&telemetry); err != nil {
+	var logbatch dto.LogBatch
+	if err := c.ShouldBindJSON(&logbatch); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "invalid request payload",
 		})
 		return
 	}
-
-	// Convert DTO → []TraceDocument
-	docs := services.ToTraceDocuments(telemetry, projID, appID)
-	var producer = kafka.NewProducer(kafkaadr, "traces-topic")
-	err := producer.SendTraces(docs)
+	logs := services.LogsConvertor(logbatch, projID, appID)
+	var producer = kafka.NewProducer(kafkaadr, "logs-topic")
+	err := producer.SendLogs(logs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to send to kafka",
 		})
 		return
 	}
+	fmt.Println(logs)
 	c.JSON(http.StatusOK, gin.H{
-		"message":       "traces ingested successfully",
+		"message":       "logs ingested successfully",
 		"applicationId": appID,
 		"projectId":     projID,
-		"docs":          docs,
+		"logs":          logs,
 	})
 }

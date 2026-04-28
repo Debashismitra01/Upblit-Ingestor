@@ -2,13 +2,9 @@ package models
 
 import (
 	"time"
-
-	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Trace struct {
-	ID primitive.ObjectID `json:"id" bson:"_id,omitempty"`
-
 	ClientTimestamp time.Time `json:"clientTimestamp" bson:"clientTimestamp"`
 	ServerTimestamp time.Time `json:"serverTimestamp" bson:"serverTimestamp"`
 
